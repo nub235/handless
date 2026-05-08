@@ -91,7 +91,7 @@ pub fn cloud_provider_registry() -> Vec<SttProviderInfo> {
             is_recommended: false,
             backend: ProviderBackend::Cloud {
                 base_url: "https://api.openai.com/v1".to_string(),
-                default_model: "gpt-4o-mini-transcribe".to_string(),
+                default_model: crate::cloud_stt::OPENAI_REALTIME_TRANSCRIPTION_MODEL.to_string(),
                 console_url: Some("https://platform.openai.com/api-keys".to_string()),
             },
             available_options: vec![

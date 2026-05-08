@@ -46,7 +46,7 @@
 //! cargo test --features cloud-stt-tests --test cloud_stt -- deepgram::batch_with_diarization
 //! ```
 
-use handless_app_lib::audio_toolkit::audio::encode_wav_bytes;
+use handless_app_lib::audio_toolkit::audio::{encode_wav_bytes, extract_pcm_from_wav};
 use handless_app_lib::cloud_stt;
 use handless_app_lib::stt_provider;
 use std::sync::Once;
@@ -127,13 +127,14 @@ mod openai {
     use super::*;
 
     const BASE_URL: &str = "https://api.openai.com/v1";
-    const MODEL: &str = "gpt-4o-mini-transcribe";
+    const BATCH_MODEL: &str = "gpt-4o-mini-transcribe";
+    const REALTIME_MODEL: &str = "gpt-realtime-whisper";
 
     #[tokio::test]
     async fn batch_default() {
         let key = require_key!("OPENAI_STT_API_KEY");
         let audio = require_audio!();
-        let result = cloud_stt::transcribe("openai_stt", &key, BASE_URL, MODEL, audio, None)
+        let result = cloud_stt::transcribe("openai_stt", &key, BASE_URL, BATCH_MODEL, audio, None)
             .await
             .unwrap();
         assert_transcript_contains(&result, "test");
@@ -144,9 +145,16 @@ mod openai {
         let key = require_key!("OPENAI_STT_API_KEY");
         let audio = require_audio!();
         let opts = serde_json::json!({ "language": "en" });
-        let result = cloud_stt::transcribe("openai_stt", &key, BASE_URL, MODEL, audio, Some(&opts))
-            .await
-            .unwrap();
+        let result = cloud_stt::transcribe(
+            "openai_stt",
+            &key,
+            BASE_URL,
+            BATCH_MODEL,
+            audio,
+            Some(&opts),
+        )
+        .await
+        .unwrap();
         assert_transcript_contains(&result, "test");
     }
 
@@ -159,9 +167,16 @@ mod openai {
             "prompt": "This is a test recording.",
             "temperature": "0.0"
         });
-        let result = cloud_stt::transcribe("openai_stt", &key, BASE_URL, MODEL, audio, Some(&opts))
-            .await
-            .unwrap();
+        let result = cloud_stt::transcribe(
+            "openai_stt",
+            &key,
+            BASE_URL,
+            BATCH_MODEL,
+            audio,
+            Some(&opts),
+        )
+        .await
+        .unwrap();
         assert_transcript_contains(&result, "test");
     }
 
@@ -176,10 +191,16 @@ mod openai {
             &["Handless".to_string(), "Tauri".to_string()],
             "A desktop speech-to-text application",
         );
-        let result =
-            cloud_stt::transcribe("openai_stt", &key, BASE_URL, MODEL, audio, opts.as_ref())
-                .await
-                .unwrap();
+        let result = cloud_stt::transcribe(
+            "openai_stt",
+            &key,
+            BASE_URL,
+            BATCH_MODEL,
+            audio,
+            opts.as_ref(),
+        )
+        .await
+        .unwrap();
         assert_transcript_contains(&result, "test");
     }
 
@@ -188,7 +209,7 @@ mod openai {
         let key = require_key!("OPENAI_STT_API_KEY");
         let audio = require_audio!();
         // No language option = auto-detect
-        let result = cloud_stt::transcribe("openai_stt", &key, BASE_URL, MODEL, audio, None)
+        let result = cloud_stt::transcribe("openai_stt", &key, BASE_URL, BATCH_MODEL, audio, None)
             .await
             .unwrap();
         assert_transcript_contains(&result, "test");
@@ -201,7 +222,7 @@ mod openai {
         // Translation uses a different endpoint on some providers; for OpenAI
         // the translate flag is handled at a higher level. This tests that the
         // basic transcribe path works when translation would be requested.
-        let result = cloud_stt::transcribe("openai_stt", &key, BASE_URL, MODEL, audio, None)
+        let result = cloud_stt::transcribe("openai_stt", &key, BASE_URL, BATCH_MODEL, audio, None)
             .await
             .unwrap();
         assert_transcript_contains(&result, "test");
@@ -211,9 +232,10 @@ mod openai {
     async fn realtime_default() {
         let key = require_key!("OPENAI_STT_API_KEY");
         let audio = require_audio!();
-        let result = cloud_stt::realtime::transcribe("openai_stt", &key, MODEL, audio, None)
-            .await
-            .unwrap();
+        let result =
+            cloud_stt::realtime::transcribe("openai_stt", &key, REALTIME_MODEL, audio, None)
+                .await
+                .unwrap();
         assert_transcript_contains(&result, "test");
     }
 
@@ -225,16 +247,84 @@ mod openai {
             "language": "en",
             "temperature": "0.0"
         });
-        let result = cloud_stt::realtime::transcribe("openai_stt", &key, MODEL, audio, Some(&opts))
+        let result =
+            cloud_stt::realtime::transcribe("openai_stt", &key, REALTIME_MODEL, audio, Some(&opts))
+                .await
+                .unwrap();
+        assert_transcript_contains(&result, "test");
+    }
+
+    #[tokio::test]
+    async fn realtime_with_dictionary() {
+        let key = require_key!("OPENAI_STT_API_KEY");
+        let audio = require_audio!();
+        let opts = serde_json::json!({ "language": "en" });
+        let opts = stt_provider::inject_dictionary(
+            "openai_stt",
+            Some(opts),
+            &["Handless".to_string(), "Tauri".to_string()],
+            "A desktop speech-to-text application",
+        );
+        let result = cloud_stt::realtime::transcribe(
+            "openai_stt",
+            &key,
+            REALTIME_MODEL,
+            audio,
+            opts.as_ref(),
+        )
+        .await
+        .unwrap();
+        assert_transcript_contains(&result, "test");
+    }
+
+    #[tokio::test]
+    async fn realtime_streaming_finish_returns_after_completion() {
+        let key = require_key!("OPENAI_STT_API_KEY");
+        let audio = require_audio!();
+        let (samples, sample_rate) = extract_pcm_from_wav(&audio).unwrap();
+        assert_eq!(sample_rate, 16_000);
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<Vec<f32>>(128);
+        let session_config = cloud_stt::realtime::SessionConfig {
+            provider_id: "openai_stt".to_string(),
+            api_key: key,
+            model: REALTIME_MODEL.to_string(),
+            options: Some(serde_json::json!({ "language": "en" })),
+            delta_tx: None,
+        };
+        let session = cloud_stt::realtime::RealtimeStreamingSession::start(session_config, rx)
             .await
             .unwrap();
-        assert_transcript_contains(&result, "test");
+
+        for chunk in samples.chunks(1600) {
+            let frame: Vec<f32> = chunk
+                .iter()
+                .map(|sample| *sample as f32 / i16::MAX as f32)
+                .collect();
+            tx.send(frame).await.unwrap();
+        }
+        drop(tx);
+
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(10), session.finish()).await;
+        let transcript = result
+            .expect("streaming finish should not hang")
+            .expect("streaming finish should return transcript");
+        assert_transcript_contains(&transcript, "test");
     }
 
     #[tokio::test]
     async fn api_key_validation() {
         let key = require_key!("OPENAI_STT_API_KEY");
-        cloud_stt::test_api_key("openai_stt", &key, BASE_URL, MODEL, None)
+        cloud_stt::test_api_key("openai_stt", &key, BASE_URL, REALTIME_MODEL, None)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn realtime_api_key_validation() {
+        let key = require_key!("OPENAI_STT_API_KEY");
+        cloud_stt::realtime::test_api_key("openai_stt", &key, BATCH_MODEL, None)
             .await
             .unwrap();
     }
@@ -242,8 +332,14 @@ mod openai {
     #[tokio::test]
     async fn api_key_validation_rejects_bad_key() {
         init();
-        let result =
-            cloud_stt::test_api_key("openai_stt", "sk-bad-key-12345", BASE_URL, MODEL, None).await;
+        let result = cloud_stt::test_api_key(
+            "openai_stt",
+            "sk-bad-key-12345",
+            BASE_URL,
+            BATCH_MODEL,
+            None,
+        )
+        .await;
         assert!(result.is_err(), "bad API key should be rejected");
     }
 }

@@ -664,7 +664,7 @@ fn default_stt_providers() -> Vec<SttProvider> {
             label: "OpenAI".to_string(),
             provider_type: SttProviderType::Cloud,
             base_url: "https://api.openai.com/v1".to_string(),
-            default_model: "gpt-4o-mini-transcribe".to_string(),
+            default_model: crate::cloud_stt::OPENAI_REALTIME_TRANSCRIPTION_MODEL.to_string(),
         },
         SttProvider {
             id: "cartesia".to_string(),

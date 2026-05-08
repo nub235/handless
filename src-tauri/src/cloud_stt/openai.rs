@@ -2,9 +2,17 @@ use anyhow::Result;
 use log::debug;
 use reqwest::multipart;
 
+fn resolve_batch_model(model: &str) -> &str {
+    match model.trim() {
+        "" | super::OPENAI_REALTIME_TRANSCRIPTION_MODEL => super::OPENAI_BATCH_TRANSCRIPTION_MODEL,
+        model => model,
+    }
+}
+
 /// Test API key and model by sending a minimal silent audio clip.
 pub async fn test_api_key(api_key: &str, base_url: &str, model: &str) -> Result<()> {
     let wav_bytes = super::test_silence_wav()?;
+    let model = resolve_batch_model(model);
 
     let url = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));
 
@@ -38,6 +46,7 @@ pub async fn transcribe(
     options: Option<&serde_json::Value>,
 ) -> Result<String> {
     let url = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));
+    let model = resolve_batch_model(model);
 
     debug!(
         "OpenAI STT request: url={}, model={}, audio_size={}",
@@ -84,4 +93,26 @@ pub async fn transcribe(
     let result: super::TranscriptionResponse = response.json().await?;
     debug!("OpenAI STT result: '{}'", result.text);
     Ok(result.text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_realtime_only_model_to_batch_default() {
+        assert_eq!(
+            resolve_batch_model(super::super::OPENAI_REALTIME_TRANSCRIPTION_MODEL),
+            super::super::OPENAI_BATCH_TRANSCRIPTION_MODEL
+        );
+        assert_eq!(
+            resolve_batch_model(""),
+            super::super::OPENAI_BATCH_TRANSCRIPTION_MODEL
+        );
+    }
+
+    #[test]
+    fn preserves_custom_batch_model() {
+        assert_eq!(resolve_batch_model("whisper-1"), "whisper-1");
+    }
 }

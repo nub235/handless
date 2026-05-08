@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-05-08
+
+### Changed
+
+- OpenAI speech-to-text defaults now use the current realtime transcription model while batch transcription falls back to the batch model automatically
+
+### Fixed
+
+- OpenAI realtime streaming keeps live overlay transcription active while still returning promptly after recording stops
+
 ## [0.2.9] - 2026-04-27
 
 ### Added

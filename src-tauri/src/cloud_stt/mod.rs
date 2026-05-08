@@ -12,6 +12,9 @@ pub mod openai;
 pub mod realtime;
 pub mod soniox;
 
+pub(crate) const OPENAI_BATCH_TRANSCRIPTION_MODEL: &str = "gpt-4o-mini-transcribe";
+pub(crate) const OPENAI_REALTIME_TRANSCRIPTION_MODEL: &str = "gpt-realtime-whisper";
+
 #[derive(Deserialize)]
 pub(crate) struct TranscriptionResponse {
     pub text: String,

@@ -2,7 +2,13 @@ use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use futures_util::{SinkExt, StreamExt};
 use log::debug;
-use std::time::Duration;
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{client::IntoClientRequest, Message},
@@ -27,6 +33,19 @@ fn build_ws_url() -> String {
     format!("{}?intent=transcription", OPENAI_WS_URL)
 }
 
+fn resolve_realtime_model(model: &str) -> &str {
+    match model.trim() {
+        "" | crate::cloud_stt::OPENAI_BATCH_TRANSCRIPTION_MODEL => {
+            crate::cloud_stt::OPENAI_REALTIME_TRANSCRIPTION_MODEL
+        }
+        model => model,
+    }
+}
+
+fn supports_prompt(model: &str) -> bool {
+    model != crate::cloud_stt::OPENAI_REALTIME_TRANSCRIPTION_MODEL
+}
+
 /// Build a WebSocket request with the required headers for the OpenAI Realtime API.
 fn build_ws_request(api_key: &str) -> Result<tokio_tungstenite::tungstenite::http::Request<()>> {
     let url = build_ws_url();
@@ -34,17 +53,14 @@ fn build_ws_request(api_key: &str) -> Result<tokio_tungstenite::tungstenite::htt
     request
         .headers_mut()
         .insert("Authorization", format!("Bearer {}", api_key).parse()?);
-    request
-        .headers_mut()
-        .insert("OpenAI-Beta", "realtime=v1".parse()?);
     Ok(request)
 }
 
-/// Build the `transcription_session.update` event to configure the session.
+/// Build the `session.update` event to configure a GA transcription-only session.
 fn build_session_update(
     model: &str,
-    input_format: &str,
     options: Option<&serde_json::Value>,
+    turn_detection: serde_json::Value,
 ) -> serde_json::Value {
     let mut transcription = serde_json::json!({
         "model": model,
@@ -54,7 +70,8 @@ fn build_session_update(
         // Language: accept ISO-639-1 code from options
         if let Some(lang) = opts.get("language").and_then(|v| v.as_str()) {
             if !lang.is_empty() {
-                transcription["language"] = serde_json::json!(lang);
+                let code = crate::cloud_stt::strip_lang_subtag(lang);
+                transcription["language"] = serde_json::json!(code);
             }
         }
         // Also support language_hints array (take the first)
@@ -68,21 +85,29 @@ fn build_session_update(
                 }
             }
         }
-        // Prompt for style guidance
-        if let Some(prompt) = opts.get("prompt").and_then(|v| v.as_str()) {
-            if !prompt.is_empty() {
-                transcription["prompt"] = serde_json::json!(prompt);
+        if supports_prompt(model) {
+            // Prompt for style guidance on realtime models that support it.
+            if let Some(prompt) = opts.get("prompt").and_then(|v| v.as_str()) {
+                if !prompt.is_empty() {
+                    transcription["prompt"] = serde_json::json!(prompt);
+                }
             }
         }
     }
 
     serde_json::json!({
-        "type": "transcription_session.update",
+        "type": "session.update",
         "session": {
-            "input_audio_format": input_format,
-            "input_audio_transcription": transcription,
-            "turn_detection": {
-                "type": "server_vad",
+            "type": "transcription",
+            "audio": {
+                "input": {
+                    "format": {
+                        "type": "audio/pcm",
+                        "rate": OPENAI_SAMPLE_RATE,
+                    },
+                    "transcription": transcription,
+                    "turn_detection": turn_detection,
+                },
             },
         }
     })
@@ -188,14 +213,36 @@ fn resample_i16le(pcm: &[u8], from_rate: u32, to_rate: u32) -> Vec<u8> {
 /// A successful connection + session configuration acceptance validates the key and model.
 pub async fn test_api_key(api_key: &str, model: &str) -> Result<()> {
     let request = build_ws_request(api_key)?;
+    let model = resolve_realtime_model(model);
 
     let (ws_stream, _) = connect_async(request)
         .await
         .map_err(|e| anyhow::anyhow!("OpenAI RT connection failed: {}", e))?;
     let (mut write, mut read) = ws_stream.split();
 
-    // Send session update to configure transcription mode
-    let session_update = build_session_update(model, "pcm16", None);
+    // Wait for session.created before configuring transcription mode.
+    let msg = tokio::time::timeout(WS_READ_TIMEOUT, read.next()).await;
+    match msg {
+        Ok(Some(msg)) => {
+            let msg = msg?;
+            if let Message::Text(text) = msg {
+                let resp: serde_json::Value = serde_json::from_str(&text)?;
+                check_error(&resp)?;
+            }
+        }
+        Ok(None) => {
+            return Err(anyhow::anyhow!(
+                "OpenAI RT: connection closed before session.created"
+            ));
+        }
+        Err(_) => {
+            return Err(anyhow::anyhow!(
+                "OpenAI RT: timed out waiting for session.created"
+            ));
+        }
+    }
+
+    let session_update = build_session_update(model, None, serde_json::Value::Null);
     write
         .send(Message::Text(session_update.to_string().into()))
         .await?;
@@ -228,6 +275,7 @@ pub async fn transcribe(
     audio_wav: Vec<u8>,
     options: Option<&serde_json::Value>,
 ) -> Result<String> {
+    let model = resolve_realtime_model(model);
     debug!("OpenAI RT: model={}, audio_size={}", model, audio_wav.len());
 
     let request = build_ws_request(api_key)?;
@@ -260,7 +308,7 @@ pub async fn transcribe(
     }
 
     // Configure the transcription session
-    let session_update = build_session_update(model, "pcm16", options);
+    let session_update = build_session_update(model, options, serde_json::Value::Null);
     write
         .send(Message::Text(session_update.to_string().into()))
         .await?;
@@ -351,6 +399,7 @@ pub async fn start_streaming(
     delta_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 ) -> Result<StreamingHandles> {
     let request = build_ws_request(api_key)?;
+    let model = resolve_realtime_model(model);
 
     let (ws_stream, _) = connect_async(request)
         .await
@@ -379,15 +428,24 @@ pub async fn start_streaming(
         }
     }
 
-    // Configure the transcription session with turn_detection disabled
-    // so we control when audio is committed.
-    let session_update = build_session_update(model, "pcm16", options.as_ref());
+    // Keep server VAD enabled so OpenAI emits live transcription deltas during
+    // recording; the final commit below flushes any remaining buffered audio.
+    let session_update = build_session_update(
+        model,
+        options.as_ref(),
+        serde_json::json!({
+            "type": "server_vad",
+        }),
+    );
     write
         .send(Message::Text(session_update.to_string().into()))
         .await?;
 
     // Sender task: reads audio frames from the channel, converts to i16 PCM,
     // resamples to 24kHz, base64-encodes, and sends as input_audio_buffer.append events.
+    let sender_done = Arc::new(AtomicBool::new(false));
+    let reader_sender_done = Arc::clone(&sender_done);
+
     let sender_handle = tokio::spawn(async move {
         while let Some(frame) = audio_rx.recv().await {
             // Convert f32 [-1.0, 1.0] to i16 LE bytes at 16kHz
@@ -410,13 +468,15 @@ pub async fn start_streaming(
         }
 
         // Audio channel closed — commit the audio buffer to trigger final transcription
-        write
+        let commit_result = write
             .send(Message::Text(
                 serde_json::json!({"type": "input_audio_buffer.commit"})
                     .to_string()
                     .into(),
             ))
-            .await?;
+            .await;
+        sender_done.store(true, Ordering::Release);
+        commit_result?;
 
         // Don't send Close here; let the reader finish collecting results first.
         Ok(())
@@ -478,6 +538,10 @@ pub async fn start_streaming(
                             if let Some(tx) = &delta_tx {
                                 let _ = tx.send(final_text.clone());
                             }
+
+                            if reader_sender_done.load(Ordering::Acquire) {
+                                break;
+                            }
                         }
                         _ => {}
                     }
@@ -503,4 +567,103 @@ pub async fn start_streaming(
         sender_handle,
         reader_handle,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_update_uses_current_transcription_schema() {
+        let update = build_session_update(
+            crate::cloud_stt::OPENAI_REALTIME_TRANSCRIPTION_MODEL,
+            None,
+            serde_json::Value::Null,
+        );
+
+        assert_eq!(update["type"].as_str(), Some("session.update"));
+        assert_eq!(update["session"]["type"].as_str(), Some("transcription"));
+        assert_eq!(
+            update["session"]["audio"]["input"]["format"]["type"].as_str(),
+            Some("audio/pcm")
+        );
+        assert_eq!(
+            update["session"]["audio"]["input"]["format"]["rate"].as_u64(),
+            Some(24_000)
+        );
+        assert_eq!(
+            update["session"]["audio"]["input"]["transcription"]["model"].as_str(),
+            Some(crate::cloud_stt::OPENAI_REALTIME_TRANSCRIPTION_MODEL)
+        );
+        assert!(update["session"]["audio"]["input"]["turn_detection"].is_null());
+    }
+
+    #[test]
+    fn session_update_can_enable_server_vad_for_streaming() {
+        let update = build_session_update(
+            crate::cloud_stt::OPENAI_REALTIME_TRANSCRIPTION_MODEL,
+            None,
+            serde_json::json!({ "type": "server_vad" }),
+        );
+
+        assert_eq!(
+            update["session"]["audio"]["input"]["turn_detection"]["type"].as_str(),
+            Some("server_vad")
+        );
+    }
+
+    #[test]
+    fn session_update_normalizes_language_and_omits_unsupported_prompt() {
+        let options = serde_json::json!({
+            "language": "zh-Hans",
+            "prompt": "Keywords: Handless, Tauri"
+        });
+        let update = build_session_update(
+            crate::cloud_stt::OPENAI_REALTIME_TRANSCRIPTION_MODEL,
+            Some(&options),
+            serde_json::Value::Null,
+        );
+        let transcription = &update["session"]["audio"]["input"]["transcription"];
+
+        assert_eq!(transcription["language"].as_str(), Some("zh"));
+        assert!(transcription["prompt"].is_null());
+    }
+
+    #[test]
+    fn session_update_preserves_prompt_for_custom_model() {
+        let options = serde_json::json!({
+            "prompt": "Keywords: Handless, Tauri"
+        });
+        let update = build_session_update(
+            "custom-realtime-model",
+            Some(&options),
+            serde_json::Value::Null,
+        );
+        let transcription = &update["session"]["audio"]["input"]["transcription"];
+
+        assert_eq!(
+            transcription["prompt"].as_str(),
+            Some("Keywords: Handless, Tauri")
+        );
+    }
+
+    #[test]
+    fn realtime_defaults_to_current_whisper_model_for_legacy_batch_default() {
+        assert_eq!(
+            resolve_realtime_model(crate::cloud_stt::OPENAI_BATCH_TRANSCRIPTION_MODEL),
+            crate::cloud_stt::OPENAI_REALTIME_TRANSCRIPTION_MODEL
+        );
+        assert_eq!(
+            resolve_realtime_model(""),
+            crate::cloud_stt::OPENAI_REALTIME_TRANSCRIPTION_MODEL
+        );
+    }
+
+    #[test]
+    fn realtime_preserves_custom_model() {
+        assert_eq!(
+            resolve_realtime_model("custom-realtime-model"),
+            "custom-realtime-model"
+        );
+    }
 }
