@@ -78,6 +78,10 @@ interface SettingsStore {
     providerId: string,
     enabled: boolean,
   ) => Promise<void>;
+  updateSttRealtimeChunkMs: (
+    providerId: string,
+    chunkMs: number,
+  ) => Promise<void>;
   verifySttProvider: (
     providerId: string,
     apiKey: string,
@@ -760,6 +764,22 @@ export const useSettingsStore = create<SettingsStore>()(
         await refreshSettings();
       } catch (error) {
         console.error("Failed to update STT realtime enabled:", error);
+      } finally {
+        setUpdating(updateKey, false);
+      }
+    },
+
+    updateSttRealtimeChunkMs: async (providerId, chunkMs) => {
+      const { setUpdating, refreshSettings } = get();
+      const updateKey = `stt_realtime_chunk:${providerId}`;
+
+      setUpdating(updateKey, true);
+
+      try {
+        await commands.changeSttRealtimeChunkMsSetting(providerId, chunkMs);
+        await refreshSettings();
+      } catch (error) {
+        console.error("Failed to update STT realtime chunk size:", error);
       } finally {
         setUpdating(updateKey, false);
       }

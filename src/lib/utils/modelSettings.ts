@@ -19,7 +19,10 @@ export const getModelSettingsProps = (provider: SttProviderInfo) => {
     engineType === "Canary" ||
     engineType === "Cohere";
   return {
-    showSettings: supportsLanguageSelection || provider.supports_translation,
+    showSettings:
+      supportsLanguageSelection ||
+      provider.supports_translation ||
+      provider.supports_realtime,
     supportedLanguages: provider.supported_languages,
     supportsTranslation: provider.supports_translation,
     supportsAutoLanguage,

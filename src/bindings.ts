@@ -411,6 +411,14 @@ async changeSttRealtimeEnabledSetting(providerId: string, enabled: boolean) : Pr
     else return { status: "error", error: e  as any };
 }
 },
+async changeSttRealtimeChunkMsSetting(providerId: string, chunkMs: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_stt_realtime_chunk_ms_setting", { providerId, chunkMs }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Start key recording mode
  */
@@ -950,7 +958,7 @@ async isLaptop() : Promise<Result<boolean, string>> {
 /** user-defined types **/
 
 export type ActivationMode = "toggle" | "hold" | "hold_or_toggle"
-export type AppSettings = { bindings?: Partial<{ [key in string]: ShortcutBinding }>; activation_mode?: ActivationMode; audio_feedback_volume?: number; sound_theme?: SoundTheme; start_hidden?: boolean; autostart_enabled?: boolean; update_checks_enabled?: boolean; selected_model?: string; always_on_microphone?: boolean; selected_microphone?: string | null; microphone_priority?: string[]; clamshell_microphone?: string | null; selected_output_device?: string | null; translate_to_english?: boolean; selected_language?: string; overlay_enabled?: boolean; overlay_position?: OverlayPosition; debug_mode?: boolean; log_level?: LogLevel; custom_words?: string[]; model_unload_timeout?: ModelUnloadTimeout; word_correction_threshold?: number; history_limit?: number; recording_retention_period?: RecordingRetentionPeriod; paste_method?: PasteMethod; clipboard_handling?: ClipboardHandling; auto_submit?: boolean; auto_submit_key?: AutoSubmitKey; stt_provider_id?: string; stt_providers?: SttProvider[]; stt_api_keys?: Partial<{ [key in string]: string }>; stt_cloud_models?: Partial<{ [key in string]: string }>; post_process_enabled?: boolean; post_process_provider_id?: string; post_process_providers?: PostProcessProvider[]; post_process_api_keys?: Partial<{ [key in string]: string }>; post_process_models?: Partial<{ [key in string]: string }>; post_process_prompts?: LLMPrompt[]; post_process_selected_prompt_id?: string | null; mute_while_recording?: boolean; append_trailing_space?: boolean; app_language?: string; keyboard_implementation?: KeyboardImplementation; show_tray_icon?: boolean; paste_delay_ms?: number; typing_tool?: TypingTool; external_script_path: string | null; app_theme?: AppTheme; stt_verified_providers?: string[]; post_process_verified_providers?: string[]; post_process_input_prices?: Partial<{ [key in string]: number }>; post_process_output_prices?: Partial<{ [key in string]: number }>; stt_cloud_options?: Partial<{ [key in string]: string }>; stt_realtime_enabled?: Partial<{ [key in string]: boolean }>; stats_date_range?: StatsDateRange; dictionary_terms?: string[]; dictionary_context?: string }
+export type AppSettings = { bindings?: Partial<{ [key in string]: ShortcutBinding }>; activation_mode?: ActivationMode; audio_feedback_volume?: number; sound_theme?: SoundTheme; start_hidden?: boolean; autostart_enabled?: boolean; update_checks_enabled?: boolean; selected_model?: string; always_on_microphone?: boolean; selected_microphone?: string | null; microphone_priority?: string[]; clamshell_microphone?: string | null; selected_output_device?: string | null; translate_to_english?: boolean; selected_language?: string; overlay_enabled?: boolean; overlay_position?: OverlayPosition; debug_mode?: boolean; log_level?: LogLevel; custom_words?: string[]; model_unload_timeout?: ModelUnloadTimeout; word_correction_threshold?: number; history_limit?: number; recording_retention_period?: RecordingRetentionPeriod; paste_method?: PasteMethod; clipboard_handling?: ClipboardHandling; auto_submit?: boolean; auto_submit_key?: AutoSubmitKey; stt_provider_id?: string; stt_providers?: SttProvider[]; stt_api_keys?: Partial<{ [key in string]: string }>; stt_cloud_models?: Partial<{ [key in string]: string }>; post_process_enabled?: boolean; post_process_provider_id?: string; post_process_providers?: PostProcessProvider[]; post_process_api_keys?: Partial<{ [key in string]: string }>; post_process_models?: Partial<{ [key in string]: string }>; post_process_prompts?: LLMPrompt[]; post_process_selected_prompt_id?: string | null; mute_while_recording?: boolean; append_trailing_space?: boolean; app_language?: string; keyboard_implementation?: KeyboardImplementation; show_tray_icon?: boolean; paste_delay_ms?: number; typing_tool?: TypingTool; external_script_path: string | null; app_theme?: AppTheme; stt_verified_providers?: string[]; post_process_verified_providers?: string[]; post_process_input_prices?: Partial<{ [key in string]: number }>; post_process_output_prices?: Partial<{ [key in string]: number }>; stt_cloud_options?: Partial<{ [key in string]: string }>; stt_realtime_enabled?: Partial<{ [key in string]: boolean }>; stt_realtime_chunk_ms?: Partial<{ [key in string]: number }>; stats_date_range?: StatsDateRange; dictionary_terms?: string[]; dictionary_context?: string }
 export type AppTheme = "dark" | "light" | "system"
 export type AudioDevice = { index: string; name: string; is_default: boolean }
 export type AutoSubmitKey = "enter" | "ctrl_enter" | "cmd_enter"
@@ -961,7 +969,7 @@ export type CloudOptionType = { type: "Text" } | { type: "Number"; min: number; 
 export type CloudProviderOption = { key: string; label: string; option_type: CloudOptionType; description: string; default_value?: CloudOptionDefault | null }
 export type CustomSounds = { start: boolean; stop: boolean }
 export type DailySpeakingStats = { date: string; total_word_count: number; total_duration_ms: number; transcription_count: number; avg_wpm: number }
-export type EngineType = "Whisper" | "Parakeet" | "Moonshine" | "MoonshineStreaming" | "SenseVoice" | "GigaAM" | "Canary" | "Cohere"
+export type EngineType = "Whisper" | "Parakeet" | "ParakeetUnified" | "Moonshine" | "MoonshineStreaming" | "SenseVoice" | "GigaAM" | "Canary" | "Cohere"
 export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null }
 export type HistoryPage = { entries: HistoryEntry[]; total_count: number }
 /**

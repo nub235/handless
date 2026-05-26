@@ -20,6 +20,7 @@ use tauri::{AppHandle, Emitter, Manager};
 pub enum EngineType {
     Whisper,
     Parakeet,
+    ParakeetUnified,
     Moonshine,
     MoonshineStreaming,
     SenseVoice,
@@ -56,6 +57,33 @@ pub struct DownloadProgress {
     pub total: u64,
     pub percentage: f64,
 }
+
+struct ModelFile {
+    remote_name: &'static str,
+    local_name: &'static str,
+}
+
+const PARAKEET_UNIFIED_MODEL_ID: &str = "parakeet-unified-en-0.6b-int8";
+const PARAKEET_UNIFIED_BASE_URL: &str =
+    "https://huggingface.co/bobNight/parakeet-unified-en-0.6b-onnx/resolve/main";
+const PARAKEET_UNIFIED_FILES: &[ModelFile] = &[
+    ModelFile {
+        remote_name: "encoder.int8.onnx",
+        local_name: "encoder.int8.onnx",
+    },
+    ModelFile {
+        remote_name: "encoder.int8.onnx.data",
+        local_name: "encoder.int8.onnx.data",
+    },
+    ModelFile {
+        remote_name: "decoder_joint.int8.onnx",
+        local_name: "decoder_joint.int8.onnx",
+    },
+    ModelFile {
+        remote_name: "tokenizer.model",
+        local_name: "tokenizer.model",
+    },
+];
 
 pub struct ModelManager {
     app_handle: AppHandle,
@@ -271,6 +299,32 @@ impl ModelManager {
                     supports_translation: false,
                     is_recommended: true,
                     supported_languages: parakeet_v3_languages,
+                    is_custom: false,
+                },
+            );
+
+            available_models.insert(
+                "parakeet-unified-en-0.6b-int8".to_string(),
+                ModelInfo {
+                    id: "parakeet-unified-en-0.6b-int8".to_string(),
+                    name: "Parakeet Unified EN".to_string(),
+                    description: "onboarding.models.parakeet-unified-en-0.6b-int8.description"
+                        .to_string(),
+                    filename: "parakeet-unified-en-0.6b-int8".to_string(),
+                    url: Some(
+                        "https://huggingface.co/bobNight/parakeet-unified-en-0.6b-onnx".to_string(),
+                    ),
+                    size_mb: 470,
+                    is_downloaded: false,
+                    is_downloading: false,
+                    partial_size: 0,
+                    is_directory: true,
+                    engine_type: EngineType::ParakeetUnified,
+                    accuracy_score: 0.88,
+                    speed_score: 0.88,
+                    supports_translation: false,
+                    is_recommended: false,
+                    supported_languages: vec!["en".to_string()],
                     is_custom: false,
                 },
             );
@@ -578,7 +632,7 @@ impl ModelManager {
                 description: m.description.clone(),
                 supported_languages: m.supported_languages.clone(),
                 supports_translation: m.supports_translation,
-                supports_realtime: false,
+                supports_realtime: matches!(m.engine_type, EngineType::ParakeetUnified),
                 is_recommended: m.is_recommended,
                 backend: ProviderBackend::Local {
                     engine_type: m.engine_type,
@@ -848,6 +902,10 @@ impl ModelManager {
 
         let model_info =
             model_info.ok_or_else(|| anyhow::anyhow!("Model not found: {}", model_id))?;
+
+        if model_info.id == PARAKEET_UNIFIED_MODEL_ID {
+            return self.download_parakeet_unified_model(&model_info).await;
+        }
 
         let url = model_info
             .url
@@ -1187,6 +1245,181 @@ impl ModelManager {
         );
 
         Ok(())
+    }
+
+    async fn download_parakeet_unified_model(&self, model_info: &ModelInfo) -> Result<()> {
+        let final_model_dir = self.models_dir.join(&model_info.filename);
+        let temp_model_dir = self
+            .models_dir
+            .join(format!("{}.partial", &model_info.filename));
+
+        if final_model_dir.exists() {
+            if temp_model_dir.exists() {
+                let _ = fs::remove_dir_all(&temp_model_dir);
+            }
+            self.update_download_status()?;
+            return Ok(());
+        }
+
+        fs::create_dir_all(&temp_model_dir)?;
+
+        {
+            let mut models = self.available_models.lock().unwrap();
+            if let Some(model) = models.get_mut(&model_info.id) {
+                model.is_downloading = true;
+            }
+        }
+
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        {
+            let mut flags = self.cancel_flags.lock().unwrap();
+            flags.insert(model_info.id.clone(), cancel_flag.clone());
+        }
+
+        let client = reqwest::Client::new();
+        let mut total_size = 0_u64;
+        for file in PARAKEET_UNIFIED_FILES {
+            let url = format!("{}/{}", PARAKEET_UNIFIED_BASE_URL, file.remote_name);
+            if let Ok(resp) = client.head(&url).send().await {
+                total_size += resp.content_length().unwrap_or(0);
+            }
+        }
+
+        let mut downloaded = 0_u64;
+        let mut last_emit = Instant::now();
+        let throttle_duration = Duration::from_millis(100);
+
+        let emit_progress = |downloaded: u64| {
+            let progress = DownloadProgress {
+                model_id: model_info.id.clone(),
+                downloaded,
+                total: total_size,
+                percentage: if total_size > 0 {
+                    (downloaded as f64 / total_size as f64) * 100.0
+                } else {
+                    0.0
+                },
+            };
+            let _ = self.app_handle.emit("model-download-progress", &progress);
+        };
+
+        emit_progress(downloaded);
+
+        for file_info in PARAKEET_UNIFIED_FILES {
+            if cancel_flag.load(Ordering::Relaxed) {
+                self.mark_download_stopped(&model_info.id);
+                return Ok(());
+            }
+
+            let url = format!("{}/{}", PARAKEET_UNIFIED_BASE_URL, file_info.remote_name);
+            let file_path = temp_model_dir.join(file_info.local_name);
+            let partial_file_path =
+                temp_model_dir.join(format!("{}.partial", file_info.local_name));
+            let mut resume_from = partial_file_path.metadata().map(|m| m.len()).unwrap_or(0);
+
+            let mut request = client.get(&url);
+            if resume_from > 0 {
+                request = request.header("Range", format!("bytes={}-", resume_from));
+            }
+
+            let mut response = request.send().await?;
+            if resume_from > 0 && response.status() == reqwest::StatusCode::OK {
+                drop(response);
+                let _ = fs::remove_file(&partial_file_path);
+                resume_from = 0;
+                response = client.get(&url).send().await?;
+            }
+
+            if !response.status().is_success()
+                && response.status() != reqwest::StatusCode::PARTIAL_CONTENT
+            {
+                self.mark_download_stopped(&model_info.id);
+                return Err(anyhow::anyhow!(
+                    "Failed to download {}: HTTP {}",
+                    file_info.remote_name,
+                    response.status()
+                ));
+            }
+
+            let mut file = if resume_from > 0 {
+                downloaded += resume_from;
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&partial_file_path)?
+            } else {
+                File::create(&partial_file_path)?
+            };
+
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    drop(file);
+                    self.mark_download_stopped(&model_info.id);
+                    return Ok(());
+                }
+
+                let chunk = chunk.inspect_err(|_e| {
+                    self.mark_download_stopped(&model_info.id);
+                })?;
+                file.write_all(&chunk)?;
+                downloaded += chunk.len() as u64;
+
+                if last_emit.elapsed() >= throttle_duration {
+                    emit_progress(downloaded);
+                    last_emit = Instant::now();
+                }
+            }
+
+            file.flush()?;
+            drop(file);
+            fs::rename(&partial_file_path, &file_path)?;
+        }
+
+        emit_progress(total_size.max(downloaded));
+
+        if final_model_dir.exists() {
+            fs::remove_dir_all(&final_model_dir)?;
+        }
+        fs::rename(&temp_model_dir, &final_model_dir)?;
+
+        {
+            let mut models = self.available_models.lock().unwrap();
+            if let Some(model) = models.get_mut(&model_info.id) {
+                model.is_downloading = false;
+                model.is_downloaded = true;
+                model.partial_size = 0;
+            }
+        }
+
+        {
+            let mut flags = self.cancel_flags.lock().unwrap();
+            flags.remove(&model_info.id);
+        }
+
+        let _ = self
+            .app_handle
+            .emit("model-download-complete", &model_info.id);
+
+        info!(
+            "Successfully downloaded model {} to {:?}",
+            model_info.id, final_model_dir
+        );
+
+        Ok(())
+    }
+
+    fn mark_download_stopped(&self, model_id: &str) {
+        {
+            let mut models = self.available_models.lock().unwrap();
+            if let Some(model) = models.get_mut(model_id) {
+                model.is_downloading = false;
+            }
+        }
+        {
+            let mut flags = self.cancel_flags.lock().unwrap();
+            flags.remove(model_id);
+        }
     }
 
     pub fn delete_model(&self, model_id: &str) -> Result<()> {

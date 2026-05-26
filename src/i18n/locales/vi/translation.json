@@ -93,6 +93,10 @@
       "cohere-int8": {
         "name": "Cohere",
         "description": "A large, slower, but very accurate multilingual model."
+      },
+      "parakeet-unified-en-0.6b-int8": {
+        "name": "Parakeet Unified EN",
+        "description": "Fast English transcription with local realtime streaming."
       }
     },
     "errors": {
@@ -341,7 +345,8 @@
         }
       },
       "localModels": {
-        "title": "Mô hình cục bộ"
+        "title": "Mô hình cục bộ",
+        "realtimeChunkSize": "Chunk size (ms)"
       },
       "myModels": {
         "noModelsConfigured": "Chưa cấu hình mô hình nào. Truy cập Thư viện để tải mô hình hoặc thiết lập nhà cung cấp đám mây."

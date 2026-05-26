@@ -24,6 +24,9 @@ use tokio::sync::Mutex as TokioMutex;
 /// Managed state holding the active streaming session (if any).
 pub type ActiveStreamingState = Arc<TokioMutex<Option<RealtimeStreamingSession>>>;
 
+/// Managed state holding the active local Parakeet streaming session (if any).
+pub type ActiveLocalStreamingState = Arc<TokioMutex<Option<LocalStreamingSession>>>;
+
 /// Managed state tracking when the user pressed the record key.
 pub type RecordingStartTime = Arc<std::sync::Mutex<Option<Instant>>>;
 
@@ -31,6 +34,91 @@ pub type RecordingStartTime = Arc<std::sync::Mutex<Option<Instant>>>;
 /// Calling `.abort()` cancels the spawned async task so a stale cloud
 /// connection does not block the next recording or paste stale text.
 pub type PipelineAbortHandle = Arc<TokioMutex<Option<tauri::async_runtime::JoinHandle<()>>>>;
+
+pub struct LocalStreamingSession {
+    handle: tauri::async_runtime::JoinHandle<anyhow::Result<String>>,
+}
+
+impl LocalStreamingSession {
+    async fn finish(self) -> anyhow::Result<String> {
+        self.handle
+            .await
+            .map_err(|e| anyhow::anyhow!("Local streaming task failed: {}", e))?
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn aligned_parakeet_chunk_ms(chunk_ms: u64) -> u64 {
+    let clamped = chunk_ms.clamp(80, 2_400);
+    ((clamped + 40) / 80) * 80
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn start_parakeet_unified_streaming(
+    app: &AppHandle,
+    tm: Arc<TranscriptionManager>,
+    model_id: String,
+    mut rx: tokio::sync::mpsc::Receiver<Vec<f32>>,
+    chunk_ms: u64,
+) -> anyhow::Result<LocalStreamingSession> {
+    use parakeet_rs::{ParakeetUnified, UnifiedStreamingConfig};
+
+    let handle = tm.get_parakeet_unified_handle(&model_id)?;
+    let app_for_delta = app.clone();
+    let chunk_ms = aligned_parakeet_chunk_ms(chunk_ms);
+    let chunk_secs = chunk_ms as f32 / 1_000.0;
+    let streaming_config = UnifiedStreamingConfig {
+        left_context_secs: 5.6,
+        chunk_secs,
+        right_context_secs: chunk_secs,
+    };
+    let feed_chunk_samples = (chunk_ms as usize * 16_000) / 1_000;
+
+    let handle = tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<String> {
+        let mut model =
+            ParakeetUnified::from_shared_with_streaming_config(&handle, streaming_config)
+                .map_err(|e| anyhow::anyhow!("Failed to start Parakeet Unified stream: {}", e))?;
+        let mut pending = Vec::<f32>::with_capacity(feed_chunk_samples * 2);
+        let mut transcript = String::new();
+
+        while let Some(samples) = rx.blocking_recv() {
+            pending.extend_from_slice(&samples);
+            while pending.len() >= feed_chunk_samples {
+                let chunk: Vec<f32> = pending.drain(..feed_chunk_samples).collect();
+                let delta = model
+                    .transcribe_chunk(&chunk)
+                    .map_err(|e| anyhow::anyhow!("Parakeet Unified streaming failed: {}", e))?;
+                if !delta.is_empty() {
+                    transcript.push_str(&delta);
+                    crate::overlay::emit_streaming_text(&app_for_delta, &transcript);
+                }
+            }
+        }
+
+        if !pending.is_empty() {
+            let delta = model
+                .transcribe_chunk(&pending)
+                .map_err(|e| anyhow::anyhow!("Parakeet Unified streaming failed: {}", e))?;
+            if !delta.is_empty() {
+                transcript.push_str(&delta);
+            }
+        }
+
+        let delta = model
+            .flush()
+            .map_err(|e| anyhow::anyhow!("Parakeet Unified streaming flush failed: {}", e))?;
+        if !delta.is_empty() {
+            transcript.push_str(&delta);
+        }
+        if !transcript.is_empty() {
+            crate::overlay::emit_streaming_text(&app_for_delta, &transcript);
+        }
+
+        Ok(transcript)
+    });
+
+    Ok(LocalStreamingSession { handle })
+}
 
 /// Drop guard that notifies the [`TranscriptionCoordinator`] when the
 /// transcription pipeline finishes — whether it completes normally or panics.
@@ -147,9 +235,54 @@ impl ShortcutAction for TranscribeAction {
                 .get(&settings.stt_provider_id)
                 .copied()
                 .unwrap_or(false);
+        let use_local_streaming = settings.stt_provider_id == "local"
+            && settings.selected_model == "parakeet-unified-en-0.6b-int8"
+            && settings
+                .stt_realtime_enabled
+                .get(&settings.selected_model)
+                .copied()
+                .unwrap_or(false);
 
         // If streaming, create the audio channel and pass it to the recorder
-        let stream_tap_tx = if use_streaming {
+        let stream_tap_tx = if use_local_streaming {
+            let (tx, rx) = tokio::sync::mpsc::channel::<Vec<f32>>(128);
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            {
+                let local_streaming_state = app.state::<ActiveLocalStreamingState>();
+                let chunk_ms = settings
+                    .stt_realtime_chunk_ms
+                    .get(&settings.selected_model)
+                    .copied()
+                    .unwrap_or(560);
+                match start_parakeet_unified_streaming(
+                    app,
+                    Arc::clone(&tm),
+                    settings.selected_model.clone(),
+                    rx,
+                    chunk_ms,
+                ) {
+                    Ok(session) => {
+                        let local_streaming_state = Arc::clone(&local_streaming_state);
+                        tauri::async_runtime::spawn(async move {
+                            *local_streaming_state.lock().await = Some(session);
+                        });
+                        Some(tx)
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to start local Parakeet Unified stream: {e}. \
+                             Will fall back to batch transcription."
+                        );
+                        None
+                    }
+                }
+            }
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+            {
+                let _ = rx;
+                None
+            }
+        } else if use_streaming {
             let (tx, rx) = tokio::sync::mpsc::channel::<Vec<f32>>(128);
 
             // Create a channel for streaming transcription deltas → overlay
@@ -257,6 +390,7 @@ impl ShortcutAction for TranscribeAction {
         let tm = Arc::clone(&app.state::<Arc<TranscriptionManager>>());
         let hm = Arc::clone(&app.state::<Arc<HistoryManager>>());
         let streaming_state = Arc::clone(&app.state::<ActiveStreamingState>());
+        let local_streaming_state = Arc::clone(&app.state::<ActiveLocalStreamingState>());
         let pipeline_handle = Arc::clone(&app.state::<PipelineAbortHandle>());
 
         // Unmute before playing audio feedback so the stop sound is audible
@@ -307,12 +441,41 @@ impl ShortcutAction for TranscribeAction {
 
                 // Check if we have an active streaming session
                 let session = streaming_state.lock().await.take();
+                let local_session = local_streaming_state.lock().await.take();
 
                 let transcription_time = Instant::now();
 
                 // Returns (result, samples_for_history). In the streaming
                 // success path `samples` is not consumed so we avoid a clone.
-                let (transcription_result, samples_for_history) = if let Some(session) = session {
+                let (transcription_result, samples_for_history) = if let Some(session) =
+                    local_session
+                {
+                    debug!("Finishing local Parakeet Unified streaming session...");
+                    match session.finish().await {
+                        Ok(transcript) => {
+                            let settings = get_settings(&ah);
+                            let corrected = if !settings.custom_words.is_empty() {
+                                crate::audio_toolkit::apply_custom_words(
+                                    &transcript,
+                                    &settings.custom_words,
+                                    settings.word_correction_threshold,
+                                )
+                            } else {
+                                transcript
+                            };
+                            let filtered =
+                                crate::audio_toolkit::filter_transcription_output(&corrected);
+                            (Ok(filtered), samples)
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Local streaming session failed: {e}. Falling back to batch transcription."
+                            );
+                            let samples_for_history = samples.clone();
+                            (tm.transcribe(samples).await, samples_for_history)
+                        }
+                    }
+                } else if let Some(session) = session {
                     debug!("Finishing realtime streaming session...");
                     match session.finish().await {
                         Ok(transcript) => {

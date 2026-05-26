@@ -151,7 +151,7 @@ fn build_apple_intelligence_bridge() {
         Path::new(&sdk_path).join("System/Library/Frameworks/FoundationModels.framework");
     let has_foundation_models = framework_path.exists();
 
-    let source_file = if has_foundation_models {
+    let mut source_file = if has_foundation_models {
         println!("cargo:warning=Building with Apple Intelligence support.");
         REAL_SWIFT_FILE
     } else {
@@ -184,25 +184,39 @@ fn build_apple_intelligence_bridge() {
     // Use macOS 11.0 as deployment target for compatibility
     // The @available(macOS 26.0, *) checks in Swift handle runtime availability
     // Weak linking for FoundationModels is handled via cargo:rustc-link-arg below
-    let status = Command::new("xcrun")
-        .args([
-            "swiftc",
-            "-target",
-            "arm64-apple-macosx11.0",
-            "-sdk",
-            &sdk_path,
-            "-O",
-            "-import-objc-header",
-            BRIDGE_HEADER,
-            "-c",
-            source_file,
-            "-o",
-            object_path
-                .to_str()
-                .expect("Failed to convert object path to string"),
-        ])
-        .status()
-        .expect("Failed to invoke swiftc for Apple Intelligence bridge");
+    let compile_swift = |source_file: &str| {
+        Command::new("xcrun")
+            .args([
+                "swiftc",
+                "-target",
+                "arm64-apple-macosx11.0",
+                "-sdk",
+                &sdk_path,
+                "-O",
+                "-import-objc-header",
+                BRIDGE_HEADER,
+                "-c",
+                source_file,
+                "-o",
+                object_path
+                    .to_str()
+                    .expect("Failed to convert object path to string"),
+            ])
+            .status()
+            .expect("Failed to invoke swiftc for Apple Intelligence bridge")
+    };
+
+    let mut built_with_foundation_models = has_foundation_models && source_file == REAL_SWIFT_FILE;
+    let mut status = compile_swift(source_file);
+
+    if !status.success() && source_file == REAL_SWIFT_FILE {
+        println!(
+            "cargo:warning=Apple Intelligence Swift bridge failed to compile; falling back to stubs."
+        );
+        source_file = STUB_SWIFT_FILE;
+        status = compile_swift(source_file);
+        built_with_foundation_models = false;
+    }
 
     if !status.success() {
         panic!("swiftc failed to compile {source_file}");
@@ -235,7 +249,7 @@ fn build_apple_intelligence_bridge() {
     println!("cargo:rustc-link-search=native={}", sdk_swift_lib.display());
     println!("cargo:rustc-link-lib=framework=Foundation");
 
-    if has_foundation_models {
+    if built_with_foundation_models {
         // Use weak linking so the app can launch on systems without FoundationModels
         println!("cargo:rustc-link-arg=-weak_framework");
         println!("cargo:rustc-link-arg=FoundationModels");

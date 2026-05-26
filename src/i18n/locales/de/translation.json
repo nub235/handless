@@ -93,6 +93,10 @@
       "cohere-int8": {
         "name": "Cohere",
         "description": "A large, slower, but very accurate multilingual model."
+      },
+      "parakeet-unified-en-0.6b-int8": {
+        "name": "Parakeet Unified EN",
+        "description": "Fast English transcription with local realtime streaming."
       }
     },
     "errors": {
@@ -287,7 +291,8 @@
         }
       },
       "localModels": {
-        "title": "Lokale Modelle"
+        "title": "Lokale Modelle",
+        "realtimeChunkSize": "Chunk size (ms)"
       },
       "myModels": {
         "noModelsConfigured": "Keine Modelle konfiguriert. Besuche die Bibliothek, um Modelle herunterzuladen oder Cloud-Anbieter einzurichten."

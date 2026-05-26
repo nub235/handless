@@ -1,4 +1,4 @@
-use crate::actions::{ActiveStreamingState, PipelineAbortHandle};
+use crate::actions::{ActiveLocalStreamingState, ActiveStreamingState, PipelineAbortHandle};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::transcription::TranscriptionManager;
 use crate::shortcut;
@@ -38,6 +38,14 @@ pub fn cancel_current_operation(app: &AppHandle) {
         if let Ok(mut guard) = state.try_lock() {
             if guard.take().is_some() {
                 info!("Dropped active streaming session during cancellation");
+            }
+        }
+    }
+
+    if let Some(state) = app.try_state::<ActiveLocalStreamingState>() {
+        if let Ok(mut guard) = state.try_lock() {
+            if guard.take().is_some() {
+                info!("Dropped active local streaming session during cancellation");
             }
         }
     }

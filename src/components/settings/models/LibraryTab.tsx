@@ -23,6 +23,7 @@ export const LibraryTab: React.FC = () => {
     updateSttCloudModel,
     updateSttCloudOptions,
     updateSttRealtimeEnabled,
+    updateSttRealtimeChunkMs,
     verifySttProvider,
     isUpdating,
   } = useSettings();
@@ -168,6 +169,18 @@ export const LibraryTab: React.FC = () => {
                 downloadProgress={downloadProgress[provider.id]?.percentage}
                 downloadSpeed={downloadStats[provider.id]?.speed}
                 showRecommended={false}
+                realtimeEnabled={
+                  settings?.stt_realtime_enabled?.[provider.id] ?? false
+                }
+                realtimeChunkMs={
+                  settings?.stt_realtime_chunk_ms?.[provider.id] ?? 560
+                }
+                onRealtimeChange={(enabled) =>
+                  updateSttRealtimeEnabled(provider.id, enabled)
+                }
+                onRealtimeChunkMsChange={(chunkMs) =>
+                  updateSttRealtimeChunkMs(provider.id, chunkMs)
+                }
                 {...getModelSettingsProps(provider)}
               />
             ))}
@@ -192,6 +205,18 @@ export const LibraryTab: React.FC = () => {
                 downloadProgress={downloadProgress[provider.id]?.percentage}
                 downloadSpeed={downloadStats[provider.id]?.speed}
                 showRecommended={false}
+                realtimeEnabled={
+                  settings?.stt_realtime_enabled?.[provider.id] ?? false
+                }
+                realtimeChunkMs={
+                  settings?.stt_realtime_chunk_ms?.[provider.id] ?? 560
+                }
+                onRealtimeChange={(enabled) =>
+                  updateSttRealtimeEnabled(provider.id, enabled)
+                }
+                onRealtimeChunkMsChange={(chunkMs) =>
+                  updateSttRealtimeChunkMs(provider.id, chunkMs)
+                }
                 {...getModelSettingsProps(provider)}
               />
             ))}

@@ -431,6 +431,8 @@ pub struct AppSettings {
     pub stt_cloud_options: HashMap<String, String>,
     #[serde(default)]
     pub stt_realtime_enabled: HashMap<String, bool>,
+    #[serde(default = "default_stt_realtime_chunk_ms")]
+    pub stt_realtime_chunk_ms: HashMap<String, u64>,
     #[serde(default)]
     pub stats_date_range: StatsDateRange,
     #[serde(default)]
@@ -650,6 +652,12 @@ fn default_stt_provider_id() -> String {
     "local".to_string()
 }
 
+fn default_stt_realtime_chunk_ms() -> HashMap<String, u64> {
+    let mut map = HashMap::new();
+    map.insert("parakeet-unified-en-0.6b-int8".to_string(), 560);
+    map
+}
+
 fn default_stt_providers() -> Vec<SttProvider> {
     vec![
         SttProvider {
@@ -813,6 +821,24 @@ fn ensure_stt_defaults(settings: &mut AppSettings) -> bool {
             settings.stt_realtime_enabled.insert(info.id, true);
             changed = true;
         }
+    }
+    if !settings
+        .stt_realtime_enabled
+        .contains_key("parakeet-unified-en-0.6b-int8")
+    {
+        settings
+            .stt_realtime_enabled
+            .insert("parakeet-unified-en-0.6b-int8".to_string(), true);
+        changed = true;
+    }
+    if !settings
+        .stt_realtime_chunk_ms
+        .contains_key("parakeet-unified-en-0.6b-int8")
+    {
+        settings
+            .stt_realtime_chunk_ms
+            .insert("parakeet-unified-en-0.6b-int8".to_string(), 560);
+        changed = true;
     }
 
     changed
@@ -1171,6 +1197,7 @@ fn recover_settings_from_value(settings_value: JsonValue) -> AppSettings {
     recover_field!(post_process_output_prices);
     recover_field!(stt_cloud_options);
     recover_field!(stt_realtime_enabled);
+    recover_field!(stt_realtime_chunk_ms);
     recover_field!(stats_date_range);
     recover_field!(dictionary_terms);
     recover_field!(dictionary_context);
@@ -1386,6 +1413,7 @@ pub fn get_default_settings() -> AppSettings {
         post_process_output_prices: HashMap::new(),
         stt_cloud_options: default_stt_cloud_options(),
         stt_realtime_enabled: HashMap::new(),
+        stt_realtime_chunk_ms: default_stt_realtime_chunk_ms(),
         stats_date_range: StatsDateRange::default(),
         dictionary_terms: Vec::new(),
         dictionary_context: String::new(),

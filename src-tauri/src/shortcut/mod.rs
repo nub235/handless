@@ -975,6 +975,16 @@ fn validate_stt_provider_exists(
     Ok(())
 }
 
+fn validate_stt_realtime_target(
+    settings: &settings::AppSettings,
+    target_id: &str,
+) -> Result<(), String> {
+    if target_id == "parakeet-unified-en-0.6b-int8" {
+        return Ok(());
+    }
+    validate_stt_provider_exists(settings, target_id)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn change_stt_provider_setting(app: AppHandle, provider_id: String) -> Result<(), String> {
@@ -1023,11 +1033,29 @@ pub fn change_stt_realtime_enabled_setting(
     enabled: bool,
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
-    validate_stt_provider_exists(&settings, &provider_id)?;
+    validate_stt_realtime_target(&settings, &provider_id)?;
     settings
         .stt_realtime_enabled
         .insert(provider_id.clone(), enabled);
     settings.stt_verified_providers.remove(&provider_id);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_stt_realtime_chunk_ms_setting(
+    app: AppHandle,
+    provider_id: String,
+    chunk_ms: u64,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    validate_stt_realtime_target(&settings, &provider_id)?;
+    let clamped = chunk_ms.clamp(80, 2_400);
+    let aligned = ((clamped + 40) / 80) * 80;
+    settings
+        .stt_realtime_chunk_ms
+        .insert(provider_id.clone(), aligned);
     settings::write_settings(&app, settings);
     Ok(())
 }

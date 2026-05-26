@@ -3,6 +3,8 @@ use crate::managers::model::{EngineType, ModelManager};
 use crate::settings::{get_settings, ModelUnloadTimeout};
 use anyhow::Result;
 use log::{debug, error, info, warn};
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use parakeet_rs::{ParakeetUnified, ParakeetUnifiedHandle};
 use serde::Serialize;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -37,6 +39,8 @@ enum LoadedEngine {
     Whisper(WhisperEngine),
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
     Parakeet(ParakeetModel),
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    ParakeetUnified(ParakeetUnifiedHandle),
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
     Moonshine(MoonshineModel),
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
@@ -278,6 +282,12 @@ impl TranscriptionManager {
                     .map_err(|e| emit_load_failure("parakeet", &e))?;
                 LoadedEngine::Parakeet(engine)
             }
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            EngineType::ParakeetUnified => {
+                let engine = ParakeetUnifiedHandle::load(&model_path, None)
+                    .map_err(|e| emit_load_failure("parakeet unified", &e))?;
+                LoadedEngine::ParakeetUnified(engine)
+            }
             #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
             EngineType::Moonshine => {
                 let engine = MoonshineModel::load(
@@ -329,6 +339,12 @@ impl TranscriptionManager {
                 let err =
                     "ONNX local transcription engines are not supported on Intel macOS builds";
                 return Err(emit_load_failure("ONNX", &err));
+            }
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+            EngineType::ParakeetUnified => {
+                let err =
+                    "Parakeet Unified streaming is currently supported on Apple Silicon macOS";
+                return Err(emit_load_failure("parakeet unified", &err));
             }
         };
 
@@ -390,6 +406,31 @@ impl TranscriptionManager {
     pub fn get_current_model(&self) -> Option<String> {
         let current_model = self.current_model_id.lock().unwrap();
         current_model.clone()
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    pub fn get_parakeet_unified_handle(&self, model_id: &str) -> Result<ParakeetUnifiedHandle> {
+        let mut is_loading = self.is_loading.lock().unwrap();
+        while *is_loading {
+            is_loading = self.loading_condvar.wait(is_loading).unwrap();
+        }
+        drop(is_loading);
+
+        let needs_load = {
+            let current_model = self.current_model_id.lock().unwrap();
+            current_model.as_deref() != Some(model_id) || !self.is_model_loaded()
+        };
+        if needs_load {
+            self.load_model(model_id)?;
+        }
+
+        let engine_guard = self.lock_engine();
+        match engine_guard.as_ref() {
+            Some(LoadedEngine::ParakeetUnified(handle)) => Ok(handle.clone()),
+            _ => Err(anyhow::anyhow!(
+                "Selected model is not a Parakeet Unified streaming model"
+            )),
+        }
     }
 
     pub async fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
@@ -650,6 +691,19 @@ impl TranscriptionManager {
                                 .transcribe_with(&audio, &params)
                                 .map_err(|e| {
                                     anyhow::anyhow!("Parakeet transcription failed: {}", e)
+                                })
+                        }
+                        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                        LoadedEngine::ParakeetUnified(handle) => {
+                            let mut parakeet_engine = ParakeetUnified::from_shared(handle);
+                            parakeet_engine
+                                .transcribe_audio(audio.clone(), 16_000, 1)
+                                .map(|text| transcribe_rs::TranscriptionResult {
+                                    text,
+                                    segments: None,
+                                })
+                                .map_err(|e| {
+                                    anyhow::anyhow!("Parakeet Unified transcription failed: {}", e)
                                 })
                         }
                         #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]

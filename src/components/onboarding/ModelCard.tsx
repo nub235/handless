@@ -24,6 +24,7 @@ import Badge from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Checkbox } from "../ui/Checkbox";
 import { Dropdown } from "../ui/Dropdown";
+import { NumberInput } from "../ui/NumberInput";
 import { SelectableCard } from "../ui/SelectableCard";
 import { SimpleTooltip } from "../ui/Tooltip";
 import { useSettings } from "../../hooks/useSettings";
@@ -56,6 +57,10 @@ interface ModelCardProps {
   supportedLanguages?: string[];
   supportsTranslation?: boolean;
   supportsAutoLanguage?: boolean;
+  realtimeEnabled?: boolean;
+  realtimeChunkMs?: number;
+  onRealtimeChange?: (enabled: boolean) => void;
+  onRealtimeChunkMsChange?: (chunkMs: number) => void;
 }
 
 const ModelCard: React.FC<ModelCardProps> = ({
@@ -77,6 +82,10 @@ const ModelCard: React.FC<ModelCardProps> = ({
   supportedLanguages,
   supportsTranslation = false,
   supportsAutoLanguage = true,
+  realtimeEnabled = false,
+  realtimeChunkMs = 560,
+  onRealtimeChange,
+  onRealtimeChunkMsChange,
 }) => {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -227,6 +236,34 @@ const ModelCard: React.FC<ModelCardProps> = ({
               </span>
             </label>
           )}
+          {provider.supports_realtime && onRealtimeChange && (
+            <label className="flex items-center gap-2 cursor-pointer">
+              <Checkbox checked={realtimeEnabled} onChange={onRealtimeChange} />
+              <span className="text-xs text-text/70 font-medium">
+                {t("settings.models.cloudProviders.realtimeTranscription")}
+              </span>
+            </label>
+          )}
+          {provider.supports_realtime &&
+            realtimeEnabled &&
+            onRealtimeChunkMsChange && (
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-text/70 font-medium">
+                  {t("settings.models.localModels.realtimeChunkSize")}
+                </label>
+                <NumberInput
+                  value={realtimeChunkMs}
+                  onChange={(value) =>
+                    onRealtimeChunkMsChange(
+                      typeof value === "number" ? value : realtimeChunkMs,
+                    )
+                  }
+                  min={80}
+                  max={2400}
+                  step={80}
+                />
+              </div>
+            )}
         </div>
       )}
 

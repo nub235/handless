@@ -115,6 +115,7 @@ objc2-app-kit = { version = "0.3.2", features = ["NSScreen", "NSGraphics"] }
 objc2-foundation = { version = "0.3.2", features = ["NSGeometry"] }
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+parakeet-rs = "0.3.5"
 transcribe-rs = { version = "0.3.8", features = [
   "whisper-cpp",
   "onnx",
