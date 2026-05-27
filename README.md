@@ -22,10 +22,13 @@
   <a href="docs/README.ja.md">日本語</a>
 </p>
 
+## 
+## ⚠️ This fork adds support for [Parakeet Unified](https://huggingface.co/nvidia/parakeet-unified-en-0.6b) with real-time streaming using [parakeet-rs](https://github.com/altunenes/parakeet-rs)
+
 ## Features
 
 - **Local transcription** -- download models in Settings, runs fully on-device
-- **Cloud STT** via OpenAI or Soniox
+- **Cloud STT** via OpenAI, Soniox, Deepgram, etc
 - **Voice Activity Detection** (local models only)
 - **LLM post-processing** to clean up or reformat transcriptions
 - **macOS** (Intel & Apple Silicon)
