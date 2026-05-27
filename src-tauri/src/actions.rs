@@ -49,7 +49,7 @@ impl LocalStreamingSession {
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn aligned_parakeet_chunk_ms(chunk_ms: u64) -> u64 {
-    let clamped = chunk_ms.clamp(80, 2_400);
+    let clamped = chunk_ms.clamp(160, 2_080);
     ((clamped + 40) / 80) * 80
 }
 

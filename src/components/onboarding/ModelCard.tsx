@@ -258,8 +258,8 @@ const ModelCard: React.FC<ModelCardProps> = ({
                       typeof value === "number" ? value : realtimeChunkMs,
                     )
                   }
-                  min={80}
-                  max={2400}
+                  min={160}
+                  max={2080}
                   step={80}
                 />
               </div>

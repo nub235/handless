@@ -1051,7 +1051,7 @@ pub fn change_stt_realtime_chunk_ms_setting(
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     validate_stt_realtime_target(&settings, &provider_id)?;
-    let clamped = chunk_ms.clamp(80, 2_400);
+    let clamped = chunk_ms.clamp(160, 2_080);
     let aligned = ((clamped + 40) / 80) * 80;
     settings
         .stt_realtime_chunk_ms

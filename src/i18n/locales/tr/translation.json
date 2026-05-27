@@ -95,7 +95,7 @@
         "description": "A large, slower, but very accurate multilingual model."
       },
       "parakeet-unified-en-0.6b-int8": {
-        "name": "Parakeet Unified EN",
+        "name": "Parakeet Unified",
         "description": "Fast English transcription with local realtime streaming."
       }
     },

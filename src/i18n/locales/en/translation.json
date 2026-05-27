@@ -55,7 +55,7 @@
         "description": "Fast and accurate. Supports 25 European languages."
       },
       "parakeet-unified-en-0.6b-int8": {
-        "name": "Parakeet Unified EN",
+        "name": "Parakeet Unified",
         "description": "Fast English transcription with local realtime streaming."
       },
       "moonshine-base": {
