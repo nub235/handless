@@ -23,7 +23,7 @@
 </p>
 
 ## 
-## ⚠️ This fork adds support for [Parakeet Unified](https://huggingface.co/nvidia/parakeet-unified-en-0.6b) with real-time streaming using [parakeet-rs](https://github.com/altunenes/parakeet-rs)
+## ⚠️ This fork adds [Parakeet Unified](https://huggingface.co/nvidia/parakeet-unified-en-0.6b) with real-time streaming using [parakeet-rs](https://github.com/altunenes/parakeet-rs)
 
 ## Features
 
