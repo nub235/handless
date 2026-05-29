@@ -22,6 +22,9 @@
   <a href="docs/README.ja.md">日本語</a>
 </p>
 
+##
+## This fork adds [Parakeet Unified](https://huggingface.co/nvidia/parakeet-unified-en-0.6b) with real-time streaming using [parakeet-rs](https://github.com/altunenes/parakeet-rs)
+
 ## Features
 
 - **Local transcription** -- download models in Settings, runs fully on-device
